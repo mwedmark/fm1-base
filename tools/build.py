@@ -544,6 +544,8 @@ def build_loader():
     LDR.mkdir(parents=True, exist_ok=True)
     src = BSP / "loader"
     flags = [*CFLAGS, *inc(BSP / "chip", BSP / "boards" / "fm1")]
+    if "data_lo" in CONF:                         # the app area ends at data_lo: the loader writes no further
+        flags.append(f"-DLDR_DATA_LO={CONF['data_lo']:#x}u")
     tc_all(("cc", "-c", src / "crt0_ldr.S", "-o", LDR / "crt0_ldr.o"),
            ("cc", *flags, "-c", src / "loader.c", "-o", LDR / "loader.o"))
     elf = LDR / "loader.elf"
@@ -857,6 +859,7 @@ def build_app():
     if WIFI:
         flags += ["-DFM1B_WIFI=1", "-DSHIM_WIFI=1", *inc(SRC / "ble" / "shim")]
     flags += opt_flags()
+    flags += data_lo_flags()
     for key, flag in (("usb_audio_in", "FM1B_UAC"), ("usb_audio_out", "FM1B_UAC_OUT")):
         if key in CONF and flag not in os.environ:
             flags.append(f"-D{flag}={int(bool(CONF[key]))}")
@@ -971,6 +974,8 @@ def build_app():
     ld = SRC / "device" / ("app_wifi.ld" if WIFI else "app_packed.ld" if ram_packed() else "app.ld")
     if not WIFI and stacks() != STACKS:          # (other stack sizes: the SRAM's end and the bands moved)
         ld = stack_script(ld)
+    if "data_lo" in CONF:                         # the smaller app slot (fm1pkg_make.set_data_lo)
+        ld = data_lo_script(ld)
     LAYOUT = memory_regions(ld.read_text())
     tc("pi32v2/bin/ld", *lto, "--gc-sections", "-e", "_start", "-T", ld, *objs, *b_objs,
        *b_libs, "-o", elf)
@@ -1044,6 +1049,28 @@ def stacks():
     if tuple(out) != STACKS and not ram_packed():
         raise SystemExit("build: fm1.toml main_stack / irq_stack: only with ram_layout = \"packed\" (device/app_packed.ld)")
     return tuple(out)
+
+
+def data_lo_flags():
+    """fm1.toml data_lo: the platform's data area from data_lo (plat.h FM1B_DATA_LO), felucca-bsp's store and write
+    regions and the unencrypted XIP window with it, XDATA0 empty"""
+    if "data_lo" not in CONF:
+        return []
+    lo = f"{CONF['data_lo']:#x}u"
+    return [f"-DFM1B_DATA_LO={lo}", f"-DFL_DATA_LO={lo}", f"-DFL_XDATA0_LO={lo}", f"-DFL_XDATA0_HI={lo}",
+            f"-DFM1_FLASH_PLAIN_LO={lo}"]
+
+
+def data_lo_script(ld):
+    """-> OUT/NAME.ld with the app slot of fm1.toml data_lo: the XIP region and _app_xip_end"""
+    text = ld.read_text()
+    text, n1 = re.subn(r"(XIP\s*\(rx\)\s*:\s*ORIGIN = 0x02000120, LENGTH = )0x9DFBC", rf"\g<1>{APP_SLOT + 0x10000:#x}", text)
+    text, n2 = re.subn(r"_app_xip_end = ORIGIN\(XIP\) \+ 0x8DFBC;", f"_app_xip_end = ORIGIN(XIP) + {APP_SLOT:#x};", text)
+    if (n1, n2) != (1, 1):
+        raise SystemExit(f"build: {ld.name}: the app slot's lines not found (data_lo)")
+    out = OUT / ("data_lo_" + ld.name)
+    out.write_text(text)
+    return out
 
 
 def stack_script(ld):
@@ -1705,7 +1732,7 @@ def build_rfm1():
 
 
 def main():
-    global PRODUCT, VERSION, RELEASE, APP, OUT, GEN, LDR, ROOT, CONF, NAME, BLE, OWN, WIFI, CPU2, STEM
+    global PRODUCT, VERSION, RELEASE, APP, OUT, GEN, LDR, ROOT, CONF, NAME, BLE, OWN, WIFI, CPU2, STEM, APP_SLOT
     ap = argparse.ArgumentParser()
     ap.add_argument("app", type=Path, help="the app's directory (with fm1.toml)")
     ap.add_argument("--release", metavar="X.Y[.Z]", help="release build: identity id_prefix + XXYYZZ, version string X.Y[.Z]")
@@ -1718,6 +1745,9 @@ def main():
     APP = a.app.resolve()
     CONF = read_conf(APP / "fm1.toml")
     NAME = CONF.get("name", APP.name).lower()
+    if "data_lo" in CONF:                         # a smaller app area and the data area from its end (fm1pkg_make.set_data_lo)
+        fm1pkg_make.set_data_lo(CONF["data_lo"])
+        APP_SLOT = fm1pkg_make.APP_SLOT
     BLE = bool(CONF.get("ble")) and not a.no_ble
     OWN = BLE and CONF.get("ble_stack", "jieli") == "own"
     if CONF.get("ble_stack", "jieli") not in ("jieli", "own"):

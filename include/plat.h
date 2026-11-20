@@ -363,10 +363,17 @@ void plat_log(const char *line);
  * looks for records below 0xFC000 only, so no 0xF00 rule here. Store objects may sit there too (the template's
  * settings pair is 0xFC000 / 0xFD000): with the window on, plat_data_erase and plat_data_write refuse a store
  * object's sectors in it, so an app with this window puts its objects elsewhere (or keeps to the rest) */
+#ifdef FM1B_DATA_LO                       /* fm1.toml data_lo: a smaller app area, [0x4000, data_lo), and the data area from its
+                                           * end (one block for big data, e.g. a sample ROM); XDATA0 is then empty */
+#define PLAT_DATA_LO FM1B_DATA_LO
+#define PLAT_XDATA0_LO FM1B_DATA_LO
+#define PLAT_XDATA0_HI FM1B_DATA_LO
+#else
 #define PLAT_DATA_LO 0x97000u
-#define PLAT_DATA_HI 0xE0000u
 #define PLAT_XDATA0_LO 0x93000u
 #define PLAT_XDATA0_HI 0x97000u
+#endif
+#define PLAT_DATA_HI 0xE0000u
 #define PLAT_XDATA1_LO 0xE5000u
 #define PLAT_XDATA1_HI 0xFC000u
 #define PLAT_XDATA2_LO 0xFC000u

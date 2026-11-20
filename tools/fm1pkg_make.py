@@ -28,6 +28,16 @@ from pathlib import Path
 
 APP_SLOT = 0x8DFBC
 FLASH_SIZE = 0x93000
+DATA_LO = 0x97000                                    # the data area's start (fm1.toml data_lo: set_data_lo)
+
+
+def set_data_lo(lo):
+    """a smaller app area [0x4000, lo) and the data area from lo (fm1.toml data_lo): the slot and the CODE region shrink
+    by what the data area gains below 0x93000"""
+    global APP_SLOT, FLASH_SIZE, DATA_LO
+    if lo & 0xFFF or not 0x20000 <= lo <= 0x93000:
+        raise SystemExit(f"data_lo {lo:#x}: a sector boundary in [0x20000, 0x93000]")
+    APP_SLOT, FLASH_SIZE, DATA_LO = 0x8DFBC - (0x93000 - lo), lo, lo if lo < 0x93000 else 0x97000
 KEY = 0x980F
 # flash header: JieLi SDK defaults (burner_size 544, VID "0.01", flash_size 0xFF000,
 # fs_ver 0x10, PID "AC791N_STORY"), plain, without its CRC
@@ -146,7 +156,7 @@ def flash_image(app, key):
     ents = [entry(crc16(app), 0x120, APP_SLOT, 0x82, 0xFF, 0, "app.bin"),
             entry(crc16(cfg_tool), 0x120 + APP_SLOT, len(cfg_tool), 0x82, 0xFF, 0, "cfg_tool.bin"),
             # region descriptors; the bytes after the names are SDK packer fields (VM size, "CODE", "AUTO")
-            entry(0xFFFF, 0x93000, 352256, 0x12, 0x80, 0, bytes.fromhex("564d00ffffffffffffffffff00800000")),
+            entry(0xFFFF, FLASH_SIZE, 0xE9000 - FLASH_SIZE, 0x12, 0x80, 0, bytes.fromhex("564d00ffffffffffffffffff00800000")),
             entry(0xFFFF, 0, FLASH_SIZE, 0x92, 0x82, 0, bytes.fromhex("5052435400ffffffffffffff434f4445")),
             entry(0xFFFF, 0xE9000, 0x1000, 0x92, 0x80, 0, bytes.fromhex("4254494600ffffffffffffff4155544f")),
             entry(0xFFFF, 0xEA000, 0x12000, 0x92, 0x81, 1, "USR")]
@@ -165,8 +175,8 @@ def flash_image(app, key):
 def ufw(flash, ota, product, res=None, res_base=0):
     files = [(0, "flash.bin", flash), (100, "ota.bin", ota)]
     if res:                                          # the loader reads it a sector at a time
-        if res_base & 0xFFF or not 0x97000 <= res_base < 0xE0000:
-            raise SystemExit(f"res.bin at {res_base:#x}: whole sectors of the data area [0x97000, 0xE0000) only")
+        if res_base & 0xFFF or not DATA_LO <= res_base < 0xE0000:
+            raise SystemExit(f"res.bin at {res_base:#x}: whole sectors of the data area [{DATA_LO:#x}, 0xE0000) only")
         res = res + b"\xFF" * (-len(res) % 0x1000)
         if res_base + len(res) > 0xE0000:
             raise SystemExit(f"res.bin: {len(res):#x} B at {res_base:#x} go past the data area (0xE0000)")
