@@ -1390,6 +1390,8 @@ def opt_flags():
                                            ("resources", "FM1B_RES"), ("lcd_panel", "FM1B_LCD_PANEL"), ("xdata2", "FM1B_XDATA2"),
                                            ("headphones", "FM1B_HEADPHONES"), ("companion", "FM1B_COMPANION"))
             if (CONF.get(key) and os.environ.get(flag) != "0") or os.environ.get(flag) == "1"]   # (FM1B_MIRROR=1: a build with it, fm1.toml as it is; FM1B_BACKUP=0: without)
+    if "data_lo" in CONF:                         # the data area from data_lo in the host and web builds too (plat.h, the emulator's
+        flags.append(f"-DFM1B_DATA_LO={CONF['data_lo']:#x}u")   # data part): the device's build adds the same (data_lo_flags)
     if cache_ram_ways():
         flags.append(f"-DFM1B_CACHE_RAM={cache_ram_ways()}")   # (the host and the web: plat_cache_ram's stand-in)
     if usb_audio_channels() > 2:
