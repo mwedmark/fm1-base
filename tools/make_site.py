@@ -116,6 +116,17 @@ def tool_pages(app, conf=None, values=None):
     return out
 
 
+def res_pick(app, conf):
+    """with resources_var = true: what the installer's own-file step needs (the file's first bytes, resources_magic, and
+    the region's room: app.h APP_RES_SECTORS 4 KiB sectors less the 32-byte header), else None"""
+    if not (conf.get("resources") and conf.get("resources_var")):
+        return None
+    m = re.search(r"^\s*#\s*define\s+APP_RES_SECTORS\s+(0[xX][0-9A-Fa-f]+|\d+)[uU]?", (Path(app) / "app.h").read_text(), re.M)
+    if not m:
+        raise SystemExit(f"{app}/app.h: resources_var needs APP_RES_SECTORS as a number")
+    return {"magic": conf.get("resources_magic", ""), "max": int(m[1], 0) * 4096 - 32}
+
+
 def page(md, dst, conf, home):
     args = [sys.executable, str(SRC / "tools" / "manual_html.py"), str(md), str(dst), "--name", conf["name"],
             "--repo", conf.get("repo", ""), "--tagline", conf.get("tagline", "")]
@@ -165,6 +176,7 @@ def main(app, pkg, version, out):
     meta = json.dumps({"version": version, "product": product, "pkg": "../firmware/" + name,
                        "backup": bool(conf.get("backup")),
                        "res": "../firmware/" + res_name if res_src.exists() else None,
+                       "resPick": res_pick(app, conf),
                        "boot": {"pkg": "../firmware/" + boot_name, "version": MBOOT_VERSION,
                                 "sha256": hashlib.sha256(boot.read_bytes()).hexdigest()}})
     for mark in ("/*LIB*/", "/*META*/"):

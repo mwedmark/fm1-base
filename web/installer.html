@@ -74,6 +74,13 @@
     <p class="small"><span data-t="mbootwhy"></span>
       <a href="https://github.com/jvitkauskas/m-bootloader" target="_blank" rel="noopener">github.com/jvitkauskas/m-bootloader<span class="sr" data-t="newtab"> (opens in a new tab)</span></a></p>
   </div>
+  <div id="respick" hidden>
+    <h2 data-t="resh"></h2>
+    <p class="small" data-t="reswhy"></p>
+    <p class="small"><label for="resfile" data-t="reschoose"></label><br><input type="file" id="resfile"></p>
+    <p id="resname" class="small" role="status"></p>
+    <p><button type="button" id="resgo" class="plain" disabled data-t="resgo"></button></p>
+  </div>
   <p class="backup"><strong data-t="bakh">Back up first.</strong> <span data-t="confirmbak"></span>
     <a class="baklink" href="../backup/" target="_blank" rel="noopener"><span data-t="backuplink"></span><span class="sr" data-t="newtab"> (opens in a new tab)</span></a></p>
   <p><button type="button" id="go" disabled data-t="install">Install</button></p>
@@ -199,6 +206,9 @@ const TEXT = {
     res22: "書き込んだ内容の確認に失敗しました。", resload: "{{RES_JA}}のファイルを読み込めませんでした。ページを再読み込みしてください。",
     resnoreturn: "インストール後、FM-1 が応答しませんでした。", reslost: "USB の接続が切れました。",
     resother: "エラーコード ",
+    resh: "{{RES_JA}}を自分のファイルから", reswhy: "{{RES_JA}}は著作権のあるデータのため、このページにはありません。お手持ちのファイルを選ぶと、インストールの後に FM-1 へ書き込みます。ファイルはこのブラウザの中だけで読み込まれ、アップロードされません。",
+    reschoose: "ファイルを選ぶ:", resgo: "データだけを書き込む",
+    resloaded: "読み込みました（{n} バイト）。", resnotit: "このファイルは{{RES_JA}}ではありません。", resbig: "このファイルは大きすぎます（上限 {n} バイト）。",
   },
   en: {
     intro: "Connect the FM-1 by USB, then press Install. It works in Chrome or Edge; the browser asks once to allow MIDI: allow it.",
@@ -266,6 +276,9 @@ const TEXT = {
     res22: "what was written did not check.", resload: "the file of {{RES}} did not load. Reload the page.",
     resnoreturn: "the FM-1 did not answer after the update.", reslost: "the USB connection was lost.",
     resother: "error code ",
+    resh: "Your {{RES}}", reswhy: "{{RES}} is not on this page: it is not ours to share. Choose your own file and it is written to the FM-1 after the install, or on its own with the button below. The file is read in this browser and never uploaded.",
+    reschoose: "Choose your file:", resgo: "Write only the data",
+    resloaded: "Loaded: {n} bytes.", resnotit: "That file is not {{RES}}.", resbig: "That file is too big (at most {n} bytes).",
   },
 };
 let lang = "en";                                 /* English first; 日本語 is a click away */
@@ -472,7 +485,7 @@ async function run(img, product, isStock, sha256) {
   }
   writing = true;
   $("portpick").hidden = true;
-  $("go").disabled = $("stockgo").disabled = true;
+  $("go").disabled = $("stockgo").disabled = $("resgo").disabled = true;
   let installed = false, up = null;
   try {
     up = updater(midi, log);
@@ -523,13 +536,14 @@ async function run(img, product, isStock, sha256) {
     log(String(e && e.stack || e));
   }
   remember(up ? up.answered : []);   /* (before the resources: their updater finds it by these picks) */
-  if (installed && meta.res && !isStock) await writeRes(midi, product);
+  if (installed && res && !isStock) await writeRes(midi, product);
   if (installed && APP && APP.after && !isStock) {
     try { await APP.after(midi, appUi, appState); }
     catch (e) { say(String(e && e.message || e)); log(String(e && e.stack || e)); }
   }
   writing = false;
   $("go").disabled = !image;
+  $("resgo").disabled = !res;
   $("stockgo").disabled = !stock;
 }
 
@@ -550,6 +564,47 @@ async function writeRes(midi, product) {
   log(`resources ${why == null ? "done" : why}`);
   if (why == null) { $("bar").value = 100; sayK("resdone"); }
   else sayK("resfail", RES_WHY[why] ? t(RES_WHY[why]) : t("resother") + why);
+}
+
+/* your own resource file (meta.resPick: the app's magic and the region's room): read here, made the region as the FM-1 holds
+   it (device/res.c: the header "RES1", the payload's length and CRC-32, the header's CRC-32, then the payload) */
+function resRegion(payload) {
+  const h = new Uint8Array(32), dv = new DataView(h.buffer);
+  dv.setUint32(0, RES_MAGIC, true); dv.setUint32(4, payload.length, true); dv.setUint32(8, crc32(payload), true);
+  dv.setUint32(28, crc32(h.subarray(0, 28)), true);
+  const r = new Uint8Array(32 + payload.length);
+  r.set(h); r.set(payload, 32);
+  return r;
+}
+if (meta.resPick) {
+  $("respick").hidden = false;
+  $("resfile").addEventListener("change", async (e) => {
+    res = null;
+    $("resgo").disabled = true;
+    $("resname").textContent = "";
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    const raw = new Uint8Array(await f.arrayBuffer());
+    const magic = meta.resPick.magic || "";
+    if (!raw.length || (magic && String.fromCharCode(...raw.subarray(0, magic.length)) !== magic)) { $("resname").textContent = t("resnotit"); return; }
+    if (raw.length > meta.resPick.max) { $("resname").textContent = t("resbig").replace("{n}", meta.resPick.max); return; }
+    res = resRegion(raw);
+    $("resname").textContent = t("resloaded").replace("{n}", raw.length);
+    $("resgo").disabled = writing;
+  });
+  /* the data on its own: the FM-1 already runs this firmware */
+  $("resgo").addEventListener("click", async () => {
+    if (!res || writing) return;
+    let midi;
+    try { midi = await navigator.requestMIDIAccess({ sysex: true }); }
+    catch (e) { sayK("denied"); return; }
+    writing = true;
+    $("go").disabled = $("resgo").disabled = true;
+    await writeRes(midi, meta.product);
+    writing = false;
+    $("go").disabled = !image;
+    $("resgo").disabled = !res;
+  });
 }
 
 $("go").addEventListener("click", () => run(image, meta.product, false));

@@ -25,7 +25,15 @@
 #define RES_E_CHECK 22                              /* the payload as written does not check */
 typedef struct { uint32_t magic, len, crc, rsv[4], hcrc; } res_hdr_t;
 _Static_assert(sizeof(res_hdr_t) == RES_HEAD, "the resource commit record");
+#ifdef FM1B_RES_VAR
+/* fm1.toml resources_var = true: the region holds whatever the host writes, up to its size (the app checks what it is); the
+ * header's length and CRC-32 say what is there, not this build's constants (a file at build time is optional) */
+#define RES_MAXLEN (APP_RES_SECTORS * ST_SECTOR - RES_HEAD)
+_Static_assert(APP_RES_SECTORS * ST_SECTOR > RES_HEAD, "the region holds a header");
+static uint32_t res_len, res_crc;                   /* what the region holds (res_valid) */
+#else
 _Static_assert(FM1B_RES_LEN && RES_HEAD + FM1B_RES_LEN <= APP_RES_SECTORS * ST_SECTOR, "the resources fit the region");
+#endif
 _Static_assert(FM1B_RES_BASE == APP_RES_BASE, "the package's region (build.py reads app.h) is the one the app reads");
 _Static_assert(APP_RES_BASE >= PLAT_DATA_LO && APP_RES_BASE + APP_RES_SECTORS * ST_SECTOR <= PLAT_DATA_HI &&
                !(APP_RES_BASE & 0xFFFu), "the region: whole sectors of the data area");
@@ -40,17 +48,30 @@ static int res_valid(void)
 {
     res_hdr_t h;
     const uint8_t *p = plat_data(APP_RES_BASE + RES_HEAD);
+#ifdef FM1B_RES_VAR
+    res_len = res_crc = 0;
+    if (!p || st_read(APP_RES_BASE, &h, sizeof h) || h.magic != RES_MAGIC || h.hcrc != st_crc32(&h, sizeof h - 4u) ||
+        !h.len || h.len > RES_MAXLEN || st_crc32(p, h.len) != h.crc)   /* (the payload as the app reads it) */
+        return 0;
+    res_len = h.len, res_crc = h.crc;
+    return 1;
+#else
     if (!p || st_read(APP_RES_BASE, &h, sizeof h) || h.magic != RES_MAGIC || h.hcrc != st_crc32(&h, sizeof h - 4u) ||
         h.len != FM1B_RES_LEN || h.crc != FM1B_RES_CRC)
         return 0;
     return st_crc32(p, FM1B_RES_LEN) == FM1B_RES_CRC; /* the payload as the app reads it */
+#endif
 }
 static void res_check(void) { res_ok = (uint8_t)res_valid(); }
 
 const uint8_t *plat_res(uint32_t *len)
 {
     if (len)
+#ifdef FM1B_RES_VAR
+        *len = res_ok ? res_len : 0u;
+#else
         *len = res_ok ? FM1B_RES_LEN : 0u;
+#endif
     return res_ok ? plat_data(APP_RES_BASE + RES_HEAD) : 0;
 }
 
@@ -73,14 +94,25 @@ static int res_prog(uint32_t off, const uint8_t *src, uint32_t n)
  * code; the host is told either way (rs_note). *begun: the screen was taken */
 static int res_rx(uint32_t len, uint32_t crc, int *begun)
 {
+#ifdef FM1B_RES_VAR
+    uint32_t off, s, nsec = (RES_HEAD + len + ST_SECTOR - 1u) / ST_SECTOR;
+#else
     uint32_t off, s, nsec = (RES_HEAD + FM1B_RES_LEN + ST_SECTOR - 1u) / ST_SECTOR;
+#endif
     res_hdr_t h;
     int rc = 0;
     *begun = 0;
+#ifdef FM1B_RES_VAR
+    if (!len || len > RES_MAXLEN)
+        rc = RES_E_BUILD;                           /* (more than the region holds) */
+    else if (res_ok && len == res_len && crc == res_crc)
+        rc = 0;                                     /* (the same there already: nothing to do) */
+#else
     if (len != FM1B_RES_LEN || crc != FM1B_RES_CRC)
         rc = RES_E_BUILD;
     else if (res_ok)
         rc = 0;                                     /* (there already: nothing to do) */
+#endif
     else if (rs_playing())
         rc = RS_E_PLAYING;
 #ifdef APP_STORE_POOL
@@ -92,6 +124,9 @@ static int res_rx(uint32_t len, uint32_t crc, int *begun)
         rs_begin();                                 /* (the app's sounds stopped: none reads the region now) */
         rs_screen("RESOURCES", "0%");
         res_ok = 0;
+#ifdef FM1B_RES_VAR
+        res_len = res_crc = 0;
+#endif
         for (s = 0; s < nsec && !rc; s++)
             if (st_erase(APP_RES_BASE + s * ST_SECTOR))
                 rc = RS_E_ERASE;

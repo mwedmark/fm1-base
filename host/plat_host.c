@@ -1115,8 +1115,8 @@ static int res_there = 1;                             /* (script "res 0": an FM-
 const uint8_t *plat_res(uint32_t *len)
 {
     if (len)
-        *len = res_there ? (uint32_t)sizeof fm1b_res_data : 0u;
-    return res_there ? fm1b_res_data : 0;
+        *len = res_there ? fm1b_res_len : 0u;
+    return res_there && fm1b_res_len ? fm1b_res_data : 0;
 }
 #endif
 /* a stream (plat_sysex_begin .. end): its bytes kept as they are put, its packets into the ring as the device's */
